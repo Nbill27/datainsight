@@ -64,6 +64,5 @@ datainsight/
 
 ## Author
 
-Muhammad Nabil Deja A.R (Bill)
-Software Engineering student at Universitas Bina Insani
+Nabil Deja 
 [GitHub](https://github.com/Nbill27)
