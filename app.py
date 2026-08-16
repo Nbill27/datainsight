@@ -246,17 +246,16 @@ st.markdown(
 
 
 #READ UPLOADED FILE (CSV / XLS / XLSX)
-def read_uploaded_file(uploaded_file):
+@st.cache_data(show_spinner="Reading file...")
+def read_uploaded_file(file_bytes, file_name):
     """
-    Membaca file CSV, XLS, atau XLSX dari Streamlit file_uploader.
-    CSV dicoba dengan beberapa encoding & delimiter karena tidak
-    punya standar encoding tetap (beda-beda tergantung software
-    yang meng-export-nya).
+    Membaca file CSV, XLS, atau XLSX.
+    Menerima bytes + nama file (bukan UploadedFile) agar bisa di-cache.
     """
 
-    file_name = uploaded_file.name.lower()
+    file_name = file_name.lower()
 
-    #CSV
+    # ===== CSV =====
     if file_name.endswith(".csv"):
 
         encodings_to_try = ["utf-8", "utf-8-sig", "ISO-8859-1", "cp1252"]
@@ -267,8 +266,8 @@ def read_uploaded_file(uploaded_file):
         for enc in encodings_to_try:
 
             try:
-                uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, encoding=enc)
+                buf = io.BytesIO(file_bytes)
+                df = pd.read_csv(buf, encoding=enc)
                 break
 
             except UnicodeDecodeError as e:
@@ -277,9 +276,9 @@ def read_uploaded_file(uploaded_file):
 
             except pd.errors.ParserError as e:
                 try:
-                    uploaded_file.seek(0)
+                    buf = io.BytesIO(file_bytes)
                     df = pd.read_csv(
-                        uploaded_file,
+                        buf,
                         encoding=enc,
                         sep=None,
                         engine="python"
@@ -297,13 +296,13 @@ def read_uploaded_file(uploaded_file):
 
         return df
 
-    #XLS Excel lama, format biner
+    # ===== XLS (Excel lama, format biner) =====
     elif file_name.endswith(".xls"):
 
-        uploaded_file.seek(0)
+        buf = io.BytesIO(file_bytes)
 
         try:
-            df = pd.read_excel(uploaded_file, engine="xlrd")
+            df = pd.read_excel(buf, engine="xlrd")
         except ImportError:
             raise ImportError(
                 "Package 'xlrd' belum terinstall. Jalankan: pip install xlrd"
@@ -311,13 +310,13 @@ def read_uploaded_file(uploaded_file):
 
         return df
 
-    # XLSX Excel baru, format XML
+    # ===== XLSX (Excel baru, format XML) =====
     elif file_name.endswith(".xlsx"):
 
-        uploaded_file.seek(0)
+        buf = io.BytesIO(file_bytes)
 
         try:
-            df = pd.read_excel(uploaded_file, engine="openpyxl")
+            df = pd.read_excel(buf, engine="openpyxl")
         except ImportError:
             raise ImportError(
                 "Package 'openpyxl' belum terinstall. Jalankan: pip install openpyxl"
@@ -332,6 +331,7 @@ def read_uploaded_file(uploaded_file):
 
 
 #DETECT DATETIME COLUMNS
+@st.cache_data(show_spinner=False)
 def detect_datetime_columns(df):
 
     datetime_columns = []
@@ -372,6 +372,7 @@ def detect_datetime_columns(df):
     return datetime_columns, converted_df
 
 #DETECT IDENTIFIER COLUMNS
+@st.cache_data(show_spinner=False)
 def detect_identifier_columns(df):
 
     identifier_columns = []
@@ -478,9 +479,50 @@ def classify_columns(df, datetime_columns, identifier_columns, dtype_overrides):
     return numerical_columns, categorical_columns
 
 
+#CHART STYLE HELPER
+CHART_COLORS = {
+    "primary": "#818CF8",
+    "secondary": "#4F46E5",
+    "positive": "#10B981",
+    "negative": "#EF4444",
+    "accent": "#F59E0B",
+    "bg": "#0E1117",
+    "card_bg": "#161B22",
+    "grid": "#30363D",
+    "text": "#E5E7EB",
+    "text_muted": "#8B949E",
+}
+
+
+def apply_chart_style(fig, ax):
+    """Apply dark-theme styling to matplotlib figure."""
+    fig.patch.set_facecolor(CHART_COLORS["bg"])
+    ax.set_facecolor(CHART_COLORS["card_bg"])
+    ax.tick_params(colors=CHART_COLORS["text_muted"], labelsize=9)
+    ax.xaxis.label.set_color(CHART_COLORS["text_muted"])
+    ax.yaxis.label.set_color(CHART_COLORS["text_muted"])
+    ax.title.set_color(CHART_COLORS["text"])
+    ax.title.set_fontsize(12)
+    ax.title.set_fontweight(600)
+    ax.grid(True, alpha=0.15, color=CHART_COLORS["grid"])
+    for spine in ax.spines.values():
+        spine.set_color(CHART_COLORS["grid"])
+    fig.tight_layout()
+    return fig, ax
+
+
 #EXPORT HELPERS
 def df_to_csv_bytes(df):
     return df.to_csv(index=False).encode("utf-8")
+
+
+#CACHED OVERVIEW METRICS
+@st.cache_data(show_spinner=False)
+def compute_overview_metrics(df):
+    return {
+        "missing": int(df.isna().sum().sum()),
+        "duplicates": int(df.duplicated().sum()),
+    }
 
 
 def df_to_excel_bytes(df):
@@ -495,14 +537,21 @@ def df_to_excel_bytes(df):
 
 def fig_to_png_bytes(fig):
     buffer = io.BytesIO()
-    fig.savefig(buffer, format="png", dpi=150, bbox_inches="tight")
+    fig.savefig(buffer, format="png", dpi=150, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
     buffer.seek(0)
     return buffer.getvalue()
 
 
-def render_export_buttons(result_df, fig, filename_base, key_prefix):
+def render_export_buttons(result_df, fig_or_builder, filename_base, key_prefix):
+    """
+    fig_or_builder: matplotlib Figure OR callable that returns a Figure.
+    If callable, figure is built lazily only when PNG export is needed.
+    """
 
-    if fig is not None:
+    has_fig = fig_or_builder is not None
+
+    if has_fig:
         col1, col2, col3 = st.columns(3)
     else:
         col1, col2 = st.columns(2)
@@ -510,7 +559,7 @@ def render_export_buttons(result_df, fig, filename_base, key_prefix):
 
     with col1:
         st.download_button(
-            "Download CSV",
+            "CSV",
             df_to_csv_bytes(result_df),
             file_name=f"{filename_base}.csv",
             mime="text/csv",
@@ -523,7 +572,7 @@ def render_export_buttons(result_df, fig, filename_base, key_prefix):
 
         if excel_bytes is not None:
             st.download_button(
-                "Download Excel",
+                "Excel",
                 excel_bytes,
                 file_name=f"{filename_base}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -539,16 +588,19 @@ def render_export_buttons(result_df, fig, filename_base, key_prefix):
                 help="Install 'openpyxl' to enable Excel export (pip install openpyxl)"
             )
 
-    if fig is not None and col3 is not None:
+    if has_fig and col3 is not None:
         with col3:
+            # Lazy: build fig only when exporting
+            fig = fig_or_builder() if callable(fig_or_builder) else fig_or_builder
             st.download_button(
-                "Download Chart (PNG)",
+                "Chart (PNG)",
                 fig_to_png_bytes(fig),
                 file_name=f"{filename_base}.png",
                 mime="image/png",
                 key=f"{key_prefix}_png",
                 use_container_width=True
             )
+            plt.close(fig)
 
 
 #GENERATE SUGGESTED ANALYSIS
@@ -774,7 +826,7 @@ if uploaded_file is not None:
     try:
 
         #READ DATASET
-        raw_df = read_uploaded_file(uploaded_file)
+        raw_df = read_uploaded_file(uploaded_file.getvalue(), uploaded_file.name)
 
         #RESET STATE WHEN A NEW FILE IS UPLOADED
         if (
@@ -813,7 +865,7 @@ if uploaded_file is not None:
             with notice_col2:
 
                 if st.button(
-                    "×",
+                    "x",
                     key="close_upload_notice",
                     help="Close notification"
                 ):
@@ -822,7 +874,7 @@ if uploaded_file is not None:
 
                     st.rerun()
 
-        #PROFILING based on the cleaned working copy
+        # PROFILING (based on the cleaned working copy)
         base_df = st.session_state.working_df
 
         datetime_columns, base_df = detect_datetime_columns(base_df)
@@ -1073,7 +1125,7 @@ if uploaded_file is not None:
             unsafe_allow_html=True
         )
 
-        filtered_df = base_df.copy()
+        filtered_df = base_df  # filters below create new frames; no copy needed
 
         with st.expander("Open Filters", expanded=False):
 
@@ -1160,6 +1212,8 @@ if uploaded_file is not None:
             unsafe_allow_html=True
         )
 
+        overview_metrics = compute_overview_metrics(filtered_df)
+
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
@@ -1199,7 +1253,7 @@ if uploaded_file is not None:
                         Missing Values
                     </div>
                     <div class="metric-value">
-                        {filtered_df.isna().sum().sum():,}
+                        {overview_metrics["missing"]:,}
                     </div>
                 </div>
                 """,
@@ -1215,7 +1269,7 @@ if uploaded_file is not None:
                         Duplicate Rows
                     </div>
                     <div class="metric-value">
-                        {filtered_df.duplicated().sum():,}
+                        {overview_metrics["duplicates"]:,}
                     </div>
                 </div>
                 """,
@@ -1245,8 +1299,10 @@ if uploaded_file is not None:
 
         if search_term:
 
+            # ponytail: search limited to 5000 rows for speed; upgrade to server-side search if needed
+            search_subset = filtered_df.head(5000)
             mask = (
-                filtered_df
+                search_subset
                 .astype(str)
                 .apply(
                     lambda row: row.str.contains(
@@ -1256,10 +1312,14 @@ if uploaded_file is not None:
                 .any(axis=1)
             )
 
-            preview_df = filtered_df[mask]
+            preview_df = search_subset[mask]
+
+            note = ""
+            if len(filtered_df) > 5000:
+                note = f" (searched first 5,000 of {len(filtered_df):,} rows)"
 
             st.caption(
-                f"Found {len(preview_df):,} matching row(s)."
+                f"Found {len(preview_df):,} matching row(s){note}."
             )
 
         st.dataframe(
@@ -1321,7 +1381,7 @@ if uploaded_file is not None:
                 hide_index=True
             )
 
-        #COLUMN CLASSIFICATION
+        # COLUMN CLASSIFICATION
         with profile_tab_2:
 
             col1, col2 = st.columns(2)
@@ -1548,7 +1608,9 @@ if uploaded_file is not None:
 
                         with st.container(border=True):
 
-                            #TITLE + DESCRIPTION
+                          try:
+
+                            # TITLE + DESCRIPTION
 
                             st.markdown(
                                 f"""
@@ -1565,7 +1627,7 @@ if uploaded_file is not None:
 
                             st.divider()
 
-                            #SALES TREND
+                            # SALES TREND
                             if analysis_type == "sales_trend":
 
                                 date_column = datetime_columns[0]
@@ -1596,15 +1658,16 @@ if uploaded_file is not None:
                                         )[sales_column]
                                     )
 
-                                    fig, ax = plt.subplots(figsize=(8, 4))
-                                    ax.plot(
-                                        sales_data[date_column],
-                                        sales_data[sales_column]
-                                    )
-                                    ax.set_title(analysis["name"])
-                                    ax.set_xlabel(date_column)
-                                    ax.set_ylabel(sales_column)
-                                    fig.autofmt_xdate()
+                                    def _build_sales_fig(sd=sales_data, dc=date_column, sc=sales_column, name=analysis["name"]):
+                                        fig, ax = plt.subplots(figsize=(8, 4))
+                                        ax.plot(sd[dc], sd[sc], color=CHART_COLORS["primary"], linewidth=2)
+                                        ax.fill_between(sd[dc], sd[sc], alpha=0.1, color=CHART_COLORS["primary"])
+                                        ax.set_title(name)
+                                        ax.set_xlabel(dc)
+                                        ax.set_ylabel(sc)
+                                        fig.autofmt_xdate()
+                                        apply_chart_style(fig, ax)
+                                        return fig
 
                                     with st.expander(
                                         "View detailed data"
@@ -1617,10 +1680,9 @@ if uploaded_file is not None:
                                         )
 
                                     render_export_buttons(
-                                        sales_data, fig,
+                                        sales_data, _build_sales_fig,
                                         "sales_trend", key_prefix
                                     )
-                                    plt.close(fig)
 
                                 else:
 
@@ -1628,7 +1690,7 @@ if uploaded_file is not None:
                                         "Sales column could not be identified."
                                     )
 
-                            #PROFIT TREND
+                            # PROFIT TREND
                             elif analysis_type == "profit_trend":
 
                                 date_column = datetime_columns[0]
@@ -1659,15 +1721,16 @@ if uploaded_file is not None:
                                         )[profit_column]
                                     )
 
-                                    fig, ax = plt.subplots(figsize=(8, 4))
-                                    ax.plot(
-                                        profit_data[date_column],
-                                        profit_data[profit_column]
-                                    )
-                                    ax.set_title(analysis["name"])
-                                    ax.set_xlabel(date_column)
-                                    ax.set_ylabel(profit_column)
-                                    fig.autofmt_xdate()
+                                    def _build_profit_fig(pd_=profit_data, dc=date_column, pc=profit_column, name=analysis["name"]):
+                                        fig, ax = plt.subplots(figsize=(8, 4))
+                                        ax.plot(pd_[dc], pd_[pc], color=CHART_COLORS["positive"], linewidth=2)
+                                        ax.fill_between(pd_[dc], pd_[pc], alpha=0.1, color=CHART_COLORS["positive"])
+                                        ax.set_title(name)
+                                        ax.set_xlabel(dc)
+                                        ax.set_ylabel(pc)
+                                        fig.autofmt_xdate()
+                                        apply_chart_style(fig, ax)
+                                        return fig
 
                                     with st.expander(
                                         "View detailed data"
@@ -1680,10 +1743,9 @@ if uploaded_file is not None:
                                         )
 
                                     render_export_buttons(
-                                        profit_data, fig,
+                                        profit_data, _build_profit_fig,
                                         "profit_trend", key_prefix
                                     )
-                                    plt.close(fig)
 
                                 else:
 
@@ -1733,19 +1795,16 @@ if uploaded_file is not None:
                                         ]
                                     )
 
-                                    fig, ax = plt.subplots(figsize=(8, 4))
-                                    ax.bar(
-                                        growth_data[date_column].astype(str),
-                                        growth_data["Growth Rate (%)"]
-                                    )
-                                    ax.axhline(0, linewidth=0.8)
-                                    ax.set_title(analysis["name"])
-                                    ax.set_ylabel("Growth Rate (%)")
-                                    plt.setp(
-                                        ax.get_xticklabels(),
-                                        rotation=45,
-                                        ha="right"
-                                    )
+                                    def _build_growth_fig(gd=growth_data, dc=date_column, name=analysis["name"]):
+                                        fig, ax = plt.subplots(figsize=(8, 4))
+                                        colors = [CHART_COLORS["positive"] if v >= 0 else CHART_COLORS["negative"] for v in gd["Growth Rate (%)"]]
+                                        ax.bar(gd[dc].astype(str), gd["Growth Rate (%)"], color=colors)
+                                        ax.axhline(0, linewidth=0.8, color=CHART_COLORS["text_muted"])
+                                        ax.set_title(name)
+                                        ax.set_ylabel("Growth Rate (%)")
+                                        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+                                        apply_chart_style(fig, ax)
+                                        return fig
 
                                     with st.expander(
                                         "View detailed data"
@@ -1758,10 +1817,9 @@ if uploaded_file is not None:
                                         )
 
                                     render_export_buttons(
-                                        growth_data, fig,
+                                        growth_data, _build_growth_fig,
                                         "growth_rate", key_prefix
                                     )
-                                    plt.close(fig)
 
                                 else:
 
@@ -1769,7 +1827,7 @@ if uploaded_file is not None:
                                         "No Sales/Profit column could be identified."
                                     )
 
-                            #SALES BY CATEGORY
+                            # SALES BY CATEGORY
                             elif analysis_type == "sales_by_category":
 
                                 dimension = analysis["dimension"]
@@ -1803,18 +1861,14 @@ if uploaded_file is not None:
                                         )[sales_column]
                                     )
 
-                                    fig, ax = plt.subplots(figsize=(8, 4))
-                                    ax.bar(
-                                        result[dimension].astype(str),
-                                        result[sales_column]
-                                    )
-                                    ax.set_title(analysis["name"])
-                                    ax.set_ylabel(sales_column)
-                                    plt.setp(
-                                        ax.get_xticklabels(),
-                                        rotation=45,
-                                        ha="right"
-                                    )
+                                    def _build_sbc_fig(r=result, dim=dimension, sc=sales_column, name=analysis["name"]):
+                                        fig, ax = plt.subplots(figsize=(8, 4))
+                                        ax.bar(r[dim].astype(str), r[sc], color=CHART_COLORS["primary"])
+                                        ax.set_title(name)
+                                        ax.set_ylabel(sc)
+                                        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+                                        apply_chart_style(fig, ax)
+                                        return fig
 
                                     with st.expander(
                                         "View detailed data"
@@ -1827,10 +1881,9 @@ if uploaded_file is not None:
                                         )
 
                                     render_export_buttons(
-                                        result, fig,
+                                        result, _build_sbc_fig,
                                         f"sales_by_{dimension}", key_prefix
                                     )
-                                    plt.close(fig)
 
                                 else:
 
@@ -1838,7 +1891,7 @@ if uploaded_file is not None:
                                         "Sales column could not be identified."
                                     )
 
-                            #PROFIT BY CATEGORY
+                            # PROFIT BY CATEGORY
                             elif analysis_type == "profit_by_category":
 
                                 dimension = analysis["dimension"]
@@ -1872,18 +1925,14 @@ if uploaded_file is not None:
                                         )[profit_column]
                                     )
 
-                                    fig, ax = plt.subplots(figsize=(8, 4))
-                                    ax.bar(
-                                        result[dimension].astype(str),
-                                        result[profit_column]
-                                    )
-                                    ax.set_title(analysis["name"])
-                                    ax.set_ylabel(profit_column)
-                                    plt.setp(
-                                        ax.get_xticklabels(),
-                                        rotation=45,
-                                        ha="right"
-                                    )
+                                    def _build_pbc_fig(r=result, dim=dimension, pc=profit_column, name=analysis["name"]):
+                                        fig, ax = plt.subplots(figsize=(8, 4))
+                                        ax.bar(r[dim].astype(str), r[pc], color=CHART_COLORS["positive"])
+                                        ax.set_title(name)
+                                        ax.set_ylabel(pc)
+                                        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+                                        apply_chart_style(fig, ax)
+                                        return fig
 
                                     with st.expander(
                                         "View detailed data"
@@ -1896,10 +1945,9 @@ if uploaded_file is not None:
                                         )
 
                                     render_export_buttons(
-                                        result, fig,
+                                        result, _build_pbc_fig,
                                         f"profit_by_{dimension}", key_prefix
                                     )
-                                    plt.close(fig)
 
                                 else:
 
@@ -1907,7 +1955,7 @@ if uploaded_file is not None:
                                         "Profit column could not be identified."
                                     )
 
-                            #TOP & BOTTOM PERFORMERS
+                            # TOP & BOTTOM PERFORMERS
                             elif analysis_type == "top_bottom_performer":
 
                                 metric_candidates = [
@@ -1964,7 +2012,7 @@ if uploaded_file is not None:
 
                                     fig, ax = plt.subplots(figsize=(8, 5))
                                     colors = [
-                                        "#2E86DE" if group == "Top" else "#E74C3C"
+                                        CHART_COLORS["positive"] if group == "Top" else CHART_COLORS["negative"]
                                         for group in combined["Group"]
                                     ]
                                     ax.barh(
@@ -1975,6 +2023,7 @@ if uploaded_file is not None:
                                     ax.set_title(analysis["name"])
                                     ax.set_xlabel(metric_column)
                                     ax.invert_yaxis()
+                                    apply_chart_style(fig, ax)
 
                                     st.pyplot(fig, use_container_width=True)
 
@@ -2009,7 +2058,7 @@ if uploaded_file is not None:
                                         "columns for this analysis."
                                     )
 
-                            #SALES VS PROFIT                        
+                            # SALES VS PROFIT                        
                             elif analysis_type == "sales_vs_profit":
 
                                 sales_column = next(
@@ -2045,16 +2094,14 @@ if uploaded_file is not None:
                                         y=profit_column
                                     )
 
-                                    fig, ax = plt.subplots(figsize=(8, 5))
-                                    ax.scatter(
-                                        scatter_data[sales_column],
-                                        scatter_data[profit_column],
-                                        alpha=0.5,
-                                        s=15
-                                    )
-                                    ax.set_title(analysis["name"])
-                                    ax.set_xlabel(sales_column)
-                                    ax.set_ylabel(profit_column)
+                                    def _build_svp_fig(sd=scatter_data, sc=sales_column, pc=profit_column, name=analysis["name"]):
+                                        fig, ax = plt.subplots(figsize=(8, 5))
+                                        ax.scatter(sd[sc], sd[pc], alpha=0.5, s=15, color=CHART_COLORS["primary"])
+                                        ax.set_title(name)
+                                        ax.set_xlabel(sc)
+                                        ax.set_ylabel(pc)
+                                        apply_chart_style(fig, ax)
+                                        return fig
 
                                     with st.expander(
                                         "View sample data"
@@ -2067,10 +2114,9 @@ if uploaded_file is not None:
                                         )
 
                                     render_export_buttons(
-                                        scatter_data, fig,
+                                        scatter_data, _build_svp_fig,
                                         "sales_vs_profit", key_prefix
                                     )
-                                    plt.close(fig)
 
                                 else:
 
@@ -2079,7 +2125,7 @@ if uploaded_file is not None:
                                     )
 
                            
-                            #QUANTITY VS SALES
+                            # QUANTITY VS SALES
                             elif analysis_type == "quantity_vs_sales":
 
                                 quantity_column = next(
@@ -2115,16 +2161,14 @@ if uploaded_file is not None:
                                         y=sales_column
                                     )
 
-                                    fig, ax = plt.subplots(figsize=(8, 5))
-                                    ax.scatter(
-                                        scatter_data[quantity_column],
-                                        scatter_data[sales_column],
-                                        alpha=0.5,
-                                        s=15
-                                    )
-                                    ax.set_title(analysis["name"])
-                                    ax.set_xlabel(quantity_column)
-                                    ax.set_ylabel(sales_column)
+                                    def _build_qvs_fig(sd=scatter_data, qc=quantity_column, sc=sales_column, name=analysis["name"]):
+                                        fig, ax = plt.subplots(figsize=(8, 5))
+                                        ax.scatter(sd[qc], sd[sc], alpha=0.5, s=15, color=CHART_COLORS["accent"])
+                                        ax.set_title(name)
+                                        ax.set_xlabel(qc)
+                                        ax.set_ylabel(sc)
+                                        apply_chart_style(fig, ax)
+                                        return fig
 
                                     with st.expander(
                                         "View sample data"
@@ -2137,10 +2181,9 @@ if uploaded_file is not None:
                                         )
 
                                     render_export_buttons(
-                                        scatter_data, fig,
+                                        scatter_data, _build_qvs_fig,
                                         "quantity_vs_sales", key_prefix
                                     )
-                                    plt.close(fig)
 
                                 else:
 
@@ -2176,16 +2219,18 @@ if uploaded_file is not None:
 
                                 for i in range(len(numerical_columns)):
                                     for j in range(len(numerical_columns)):
+                                        val = corr_matrix.iloc[i, j]
                                         ax.text(
                                             j, i,
-                                            f"{corr_matrix.iloc[i, j]:.2f}",
+                                            f"{val:.2f}",
                                             ha="center", va="center",
-                                            fontsize=8
+                                            fontsize=8,
+                                            color="white" if abs(val) > 0.5 else CHART_COLORS["text_muted"]
                                         )
 
                                 fig.colorbar(im, ax=ax, shrink=0.8)
                                 ax.set_title(analysis["name"])
-                                fig.tight_layout()
+                                apply_chart_style(fig, ax)
 
                                 st.pyplot(fig, use_container_width=True)
 
@@ -2228,7 +2273,7 @@ if uploaded_file is not None:
                                 )
                                 plt.close(fig)
 
-                            #OUTLIER DETECTION (IQR)
+                            # OUTLIER DETECTION (IQR)
                             elif analysis_type == "outlier_detection":
 
                                 outlier_column = st.selectbox(
@@ -2266,9 +2311,15 @@ if uploaded_file is not None:
                                     )
 
                                 fig, ax = plt.subplots(figsize=(6, 4))
-                                ax.boxplot(series, vert=False)
+                                bp = ax.boxplot(series, vert=False, patch_artist=True,
+                                    boxprops=dict(facecolor=CHART_COLORS["secondary"], alpha=0.7),
+                                    medianprops=dict(color=CHART_COLORS["accent"]),
+                                    whiskerprops=dict(color=CHART_COLORS["text_muted"]),
+                                    capprops=dict(color=CHART_COLORS["text_muted"]),
+                                    flierprops=dict(markeredgecolor=CHART_COLORS["negative"], markersize=4))
                                 ax.set_title(f"{outlier_column} — Boxplot")
                                 ax.set_xlabel(outlier_column)
+                                apply_chart_style(fig, ax)
 
                                 st.pyplot(fig, use_container_width=True)
 
@@ -2286,6 +2337,10 @@ if uploaded_file is not None:
                                 )
                                 plt.close(fig)
 
+                          except Exception as analysis_error:
+                            st.error(
+                                f"⚠️ Error in **{analysis['name']}**: {analysis_error}"
+                            )
             else:
 
                 st.caption(
@@ -2295,5 +2350,28 @@ if uploaded_file is not None:
     except Exception as e:
 
         st.error(
-            f"Error while reading dataset: {e}"
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:0.5em"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Error while reading dataset: {e}'
         )
+else:
+
+    st.markdown(
+        f"""
+        <div style="
+            text-align: center;
+            padding: 3rem 1rem;
+            margin-top: 1rem;
+            border: 1px dashed {palette['border']};
+            border-radius: 12px;
+            background: {palette['card_bg']};
+        ">
+            <svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:0 auto 1rem auto;color:#4F46E5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+            <div style="font-size: 1.1rem; font-weight: 600; color: {palette['text']}; margin-bottom: 0.3rem;">
+                No dataset loaded
+            </div>
+            <div style="font-size: 0.9rem; color: {palette['text_muted']};">
+                Upload a CSV or Excel file above to start exploring your data.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
