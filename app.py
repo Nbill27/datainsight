@@ -256,7 +256,7 @@ def read_uploaded_file(uploaded_file):
 
     file_name = uploaded_file.name.lower()
 
-    # ===== CSV =====
+    #CSV
     if file_name.endswith(".csv"):
 
         encodings_to_try = ["utf-8", "utf-8-sig", "ISO-8859-1", "cp1252"]
@@ -297,7 +297,7 @@ def read_uploaded_file(uploaded_file):
 
         return df
 
-    # ===== XLS (Excel lama, format biner) =====
+    #XLS Excel lama, format biner
     elif file_name.endswith(".xls"):
 
         uploaded_file.seek(0)
@@ -311,7 +311,7 @@ def read_uploaded_file(uploaded_file):
 
         return df
 
-    # ===== XLSX (Excel baru, format XML) =====
+    # XLSX Excel baru, format XML
     elif file_name.endswith(".xlsx"):
 
         uploaded_file.seek(0)
@@ -822,7 +822,7 @@ if uploaded_file is not None:
 
                     st.rerun()
 
-        # PROFILING (based on the cleaned working copy)
+        #PROFILING based on the cleaned working copy
         base_df = st.session_state.working_df
 
         datetime_columns, base_df = detect_datetime_columns(base_df)
@@ -1321,7 +1321,7 @@ if uploaded_file is not None:
                 hide_index=True
             )
 
-        # COLUMN CLASSIFICATION
+        #COLUMN CLASSIFICATION
         with profile_tab_2:
 
             col1, col2 = st.columns(2)
@@ -1548,7 +1548,7 @@ if uploaded_file is not None:
 
                         with st.container(border=True):
 
-                            # TITLE + DESCRIPTION
+                            #TITLE + DESCRIPTION
 
                             st.markdown(
                                 f"""
@@ -1565,7 +1565,7 @@ if uploaded_file is not None:
 
                             st.divider()
 
-                            # SALES TREND
+                            #SALES TREND
                             if analysis_type == "sales_trend":
 
                                 date_column = datetime_columns[0]
@@ -1628,7 +1628,7 @@ if uploaded_file is not None:
                                         "Sales column could not be identified."
                                     )
 
-                            # PROFIT TREND
+                            #PROFIT TREND
                             elif analysis_type == "profit_trend":
 
                                 date_column = datetime_columns[0]
@@ -1769,7 +1769,7 @@ if uploaded_file is not None:
                                         "No Sales/Profit column could be identified."
                                     )
 
-                            # SALES BY CATEGORY
+                            #SALES BY CATEGORY
                             elif analysis_type == "sales_by_category":
 
                                 dimension = analysis["dimension"]
@@ -1838,7 +1838,7 @@ if uploaded_file is not None:
                                         "Sales column could not be identified."
                                     )
 
-                            # PROFIT BY CATEGORY
+                            #PROFIT BY CATEGORY
                             elif analysis_type == "profit_by_category":
 
                                 dimension = analysis["dimension"]
@@ -1907,7 +1907,7 @@ if uploaded_file is not None:
                                         "Profit column could not be identified."
                                     )
 
-                            # TOP & BOTTOM PERFORMERS
+                            #TOP & BOTTOM PERFORMERS
                             elif analysis_type == "top_bottom_performer":
 
                                 metric_candidates = [
@@ -2009,7 +2009,7 @@ if uploaded_file is not None:
                                         "columns for this analysis."
                                     )
 
-                            # SALES VS PROFIT                        
+                            #SALES VS PROFIT                        
                             elif analysis_type == "sales_vs_profit":
 
                                 sales_column = next(
@@ -2079,7 +2079,7 @@ if uploaded_file is not None:
                                     )
 
                            
-                            # QUANTITY VS SALES
+                            #QUANTITY VS SALES
                             elif analysis_type == "quantity_vs_sales":
 
                                 quantity_column = next(
@@ -2228,7 +2228,7 @@ if uploaded_file is not None:
                                 )
                                 plt.close(fig)
 
-                            # OUTLIER DETECTION (IQR)
+                            #OUTLIER DETECTION (IQR)
                             elif analysis_type == "outlier_detection":
 
                                 outlier_column = st.selectbox(
